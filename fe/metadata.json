@@ -1,0 +1,5 @@
+{
+  "name": "Madlen AI Chat",
+  "description": "A robust chat interface for the Madlen Case Study, featuring OpenRouter model selection, history management, and multi-modal support.",
+  "requestFramePermissions": []
+}
