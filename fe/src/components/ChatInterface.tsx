@@ -1,27 +1,123 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Image from 'next/image';
 import { Message, AIModel } from '../types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import { RateLimitInfo } from '../services/api';
 
 interface ChatInterfaceProps {
   messages: Message[];
   isLoading: boolean;
-  onSendMessage: (text: string, image?: File) => void;
+  streamingContent: string;
+  onSendMessage: (text: string, image?: File, useStreaming?: boolean) => void;
   models: AIModel[];
   selectedModel: string;
   onModelChange: (modelId: string) => void;
   onToggleSidebar: () => void;
+  rateLimitInfo: RateLimitInfo | null;
+  useStreaming: boolean;
+  onToggleStreaming: () => void;
 }
+
+// Copy button component
+const CopyButton: React.FC<{ text: string }> = ({ text }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+      title={copied ? 'Copied!' : 'Copy to clipboard'}
+    >
+      {copied ? (
+        <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+        </svg>
+      ) : (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      )}
+    </button>
+  );
+};
+
+// Code block with copy button and syntax highlighting
+const CodeBlock: React.FC<{ language: string; children: string }> = ({ language, children }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(children);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  return (
+    <div className="relative group my-3">
+      <div className="absolute right-2 top-2 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <span className="text-xs text-slate-400 bg-slate-800 px-2 py-0.5 rounded">{language || 'code'}</span>
+        <button
+          onClick={handleCopy}
+          className="p-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+          title={copied ? 'Copied!' : 'Copy code'}
+        >
+          {copied ? (
+            <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          )}
+        </button>
+      </div>
+      <SyntaxHighlighter
+        style={oneDark}
+        language={language || 'text'}
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          borderRadius: '0.75rem',
+          padding: '1rem',
+          paddingTop: '2.5rem',
+          fontSize: '0.875rem',
+        }}
+      >
+        {children}
+      </SyntaxHighlighter>
+    </div>
+  );
+};
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
   messages,
   isLoading,
+  streamingContent,
   onSendMessage,
   models,
   selectedModel,
   onModelChange,
-  onToggleSidebar
+  onToggleSidebar,
+  rateLimitInfo,
+  useStreaming,
+  onToggleStreaming
 }) => {
   const [input, setInput] = useState('');
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -29,19 +125,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isLoading]);
+  }, [messages, isLoading, streamingContent, scrollToBottom]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if ((!input.trim() && !selectedImage) || isLoading) return;
 
-    onSendMessage(input, selectedImage || undefined);
+    onSendMessage(input, selectedImage || undefined, useStreaming);
     setInput('');
     setSelectedImage(null);
     setImagePreview(null);
@@ -55,6 +151,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  // Rate limit percentage calculation
+  const rateLimitPercentage = rateLimitInfo?.requests_remaining && rateLimitInfo?.requests_limit
+    ? (rateLimitInfo.requests_remaining / rateLimitInfo.requests_limit) * 100
+    : null;
+
   return (
     <div className="flex-1 flex flex-col h-[100dvh] bg-white dark:bg-slate-900 relative">
       {/* Header */}
@@ -67,6 +168,40 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Rate Limit Indicator */}
+          {rateLimitInfo && rateLimitInfo.requests_remaining !== null && rateLimitInfo.requests_limit !== null && (
+            <div className="hidden sm:flex items-center gap-2 px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
+              <div className="w-16 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${rateLimitPercentage && rateLimitPercentage > 50 ? 'bg-green-500' :
+                    rateLimitPercentage && rateLimitPercentage > 20 ? 'bg-yellow-500' : 'bg-red-500'
+                    }`}
+                  style={{ width: `${rateLimitPercentage || 0}%` }}
+                />
+              </div>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                {rateLimitInfo.requests_remaining}/{rateLimitInfo.requests_limit}
+              </span>
+            </div>
+          )}
+
+          {/* Streaming Toggle */}
+          <button
+            onClick={onToggleStreaming}
+            className={`px-2 py-1 text-xs rounded-full font-medium transition-colors ${useStreaming
+              ? 'bg-madlen-100 dark:bg-madlen-900/30 text-madlen-700 dark:text-madlen-400'
+              : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+              }`}
+            title={useStreaming ? 'Streaming enabled' : 'Streaming disabled'}
+          >
+            <span className="flex items-center gap-1">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Stream
+            </span>
+          </button>
+
           <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs rounded-full font-medium">
             Connected
           </span>
@@ -75,7 +210,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
-        {messages.length === 0 ? (
+        {messages.length === 0 && !streamingContent ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-8 opacity-60">
             <div className="w-24 h-24 mb-6">
               <Image
@@ -89,62 +224,102 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-2">Welcome to Madlen AI</h2>
             <p className="text-slate-500 dark:text-slate-400 max-w-md">
               Start a conversation with various AI models via OpenRouter.
-              Select a model from the top left and type your message below.
+              Select a model from the bottom left and type your message below.
             </p>
           </div>
         ) : (
-          messages.filter(msg => msg && msg.role).map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
+          <>
+            {messages.filter(msg => msg && msg.role).map((msg) => (
               <div
-                className={`
-                  max-w-[85%] sm:max-w-[75%] rounded-2xl px-5 py-4 shadow-sm text-sm sm:text-base leading-relaxed
-                  ${msg.role === 'user'
-                    ? 'bg-slate-800 dark:bg-madlen-500 text-white rounded-br-none'
-                    : 'bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-bl-none'
-                  }
-                `}
+                key={msg.id}
+                className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                {/* Image Display */}
-                {msg.imageUrl && (
-                  <div className="mb-3 rounded-lg overflow-hidden border border-white/20">
-                    <img src={msg.imageUrl} alt="Uploaded content" className="max-w-full max-h-64 object-cover" />
-                  </div>
-                )}
+                <div
+                  className={`
+                    group relative max-w-[85%] sm:max-w-[75%] rounded-2xl px-5 py-4 shadow-md text-base sm:text-lg leading-relaxed
+                    ${msg.role === 'user'
+                      ? 'bg-gradient-to-br from-madlen-600 to-madlen-700 dark:from-madlen-500 dark:to-madlen-600 text-white font-medium rounded-br-none'
+                      : 'bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-bl-none'
+                    }
+                  `}
+                >
+                  {/* Copy Button */}
+                  {msg.role === 'assistant' && (
+                    <div className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <CopyButton text={msg.content} />
+                    </div>
+                  )}
 
-                {msg.role === 'user' ? (
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
-                ) : (
-                  <div className="prose prose-sm dark:prose-invert max-w-none 
-                    prose-headings:text-slate-800 dark:prose-headings:text-slate-200 
-                    prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
-                    prose-h1:text-lg prose-h2:text-base prose-h3:text-sm
-                    prose-p:text-slate-700 dark:prose-p:text-slate-300 prose-p:my-2
-                    prose-strong:text-slate-800 dark:prose-strong:text-slate-200
-                    prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5
-                    prose-pre:bg-slate-800 prose-pre:text-slate-50 prose-pre:rounded-xl prose-pre:my-3 prose-pre:p-4 prose-pre:overflow-x-auto prose-pre:border prose-pre:border-slate-700
-                    prose-code:text-emerald-400 prose-code:font-mono prose-code:text-sm
-                    prose-pre:prose-code:bg-transparent prose-pre:prose-code:p-0 prose-pre:prose-code:text-slate-50
-                    [&_pre_code]:text-slate-50 [&_pre]:text-slate-50
-                    prose-code:bg-slate-100 dark:prose-code:bg-slate-700 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded
-                    prose-code:before:content-none prose-code:after:content-none
-                    prose-a:text-madlen-500 prose-a:no-underline hover:prose-a:underline
-                  ">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                  </div>
-                )}
+                  {/* Image Display */}
+                  {msg.imageUrl && (
+                    <div className="mb-3 rounded-lg overflow-hidden border border-white/20">
+                      <img src={msg.imageUrl} alt="Uploaded content" className="max-w-full max-h-64 object-cover" />
+                    </div>
+                  )}
 
-                <div className={`text-[10px] mt-2 opacity-50 ${msg.role === 'user' ? 'text-slate-300' : 'text-slate-400'}`}>
-                  {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                  {msg.role === 'user' ? (
+                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                  ) : (
+                    <div className="prose prose-sm dark:prose-invert max-w-none 
+                      prose-headings:text-slate-800 dark:prose-headings:text-slate-200 
+                      prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
+                      prose-h1:text-lg prose-h2:text-base prose-h3:text-sm
+                      prose-p:text-slate-700 dark:prose-p:text-slate-300 prose-p:my-2
+                      prose-strong:text-slate-800 dark:prose-strong:text-slate-200
+                      prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5
+                      prose-code:text-emerald-400 prose-code:font-mono prose-code:text-sm
+                      prose-code:bg-slate-100 dark:prose-code:bg-slate-700 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded
+                      prose-code:before:content-none prose-code:after:content-none
+                      prose-a:text-madlen-500 prose-a:no-underline hover:prose-a:underline
+                    ">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code({ className, children, ...props }) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            const isInline = !match;
+                            return isInline ? (
+                              <code className={className} {...props}>
+                                {children}
+                              </code>
+                            ) : (
+                              <CodeBlock language={match[1]}>
+                                {String(children).replace(/\n$/, '')}
+                              </CodeBlock>
+                            );
+                          }
+                        }}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+
+                  <div className={`text-xs mt-2.5 ${msg.role === 'user' ? 'text-white/70' : 'text-slate-400 dark:text-slate-500'}`}>
+                    {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))
+            ))}
+
+            {/* Streaming Content Display */}
+            {streamingContent && (
+              <div className="flex justify-start">
+                <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-bl-none px-5 py-4 shadow-sm bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700">
+                  <div className="prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-slate-200">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
+                  </div>
+                  <div className="flex items-center gap-1 mt-2">
+                    <div className="w-1.5 h-1.5 bg-madlen-500 rounded-full animate-pulse"></div>
+                    <span className="text-[10px] text-slate-400">Streaming...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
-        {isLoading && (
+        {isLoading && !streamingContent && (
           <div className="flex justify-start animate-pulse">
             <div className="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-2xl rounded-bl-none px-5 py-4 shadow-sm flex items-center gap-2">
               <div className="w-2 h-2 bg-madlen-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>

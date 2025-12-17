@@ -7,9 +7,9 @@ load_dotenv()
 
 from .routers import chat
 import os
-from .database import engine, Base
+from .core.database import engine, Base
 from . import models # Import models so they are registered
-from .telemetry import setup_telemetry
+from .core.telemetry import setup_telemetry
 
 # Create Tables
 try:

@@ -1,11 +1,19 @@
 import httpx
 import os
 import asyncio
-from typing import List, Dict, Any
+import json
+from typing import List, Dict, Any, AsyncGenerator
 from fastapi import HTTPException
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
+
+# Rate limit tracking (simple in-memory, per-instance)
+rate_limit_info = {
+    "requests_remaining": None,
+    "requests_limit": None,
+    "requests_reset": None
+}
 
 # Fallback list of stable free models if API fails
 FALLBACK_FREE_MODELS = [
@@ -39,6 +47,22 @@ FALLBACK_FREE_MODELS = [
     }
 ]
 
+def get_rate_limit_info() -> Dict[str, Any]:
+    """Returns current rate limit information"""
+    return rate_limit_info.copy()
+
+def _update_rate_limit_from_headers(headers: httpx.Headers):
+    """Update rate limit info from response headers"""
+    global rate_limit_info
+    
+    # OpenRouter uses these headers for rate limiting
+    if "x-ratelimit-remaining" in headers:
+        rate_limit_info["requests_remaining"] = int(headers.get("x-ratelimit-remaining", 0))
+    if "x-ratelimit-limit" in headers:
+        rate_limit_info["requests_limit"] = int(headers.get("x-ratelimit-limit", 0))
+    if "x-ratelimit-reset" in headers:
+        rate_limit_info["requests_reset"] = headers.get("x-ratelimit-reset")
+
 async def get_models() -> List[Dict[str, Any]]:
     """
     Fetches the list of available free models from OpenRouter API.
@@ -57,6 +81,7 @@ async def get_models() -> List[Dict[str, Any]]:
                 timeout=15.0
             )
             response.raise_for_status()
+            _update_rate_limit_from_headers(response.headers)
             data = response.json()
             
             # Filter for free models (pricing.prompt == "0")
@@ -141,11 +166,13 @@ async def chat_completion(
                     timeout=60.0
                 )
                 response.raise_for_status()
+                _update_rate_limit_from_headers(response.headers)
                 return response.json()
                 
             except httpx.HTTPStatusError as e:
                 error_text = e.response.text
                 status_code = e.response.status_code
+                _update_rate_limit_from_headers(e.response.headers)
                 
                 # Handle rate limiting (429)
                 if status_code == 429:
@@ -192,4 +219,70 @@ async def chat_completion(
             except Exception as e:
                 print(f"Network Error: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Internal Service Error: {str(e)}")
+
+
+async def chat_completion_stream(
+    model: str, 
+    messages: List[Dict[str, str]], 
+    site_url: str = "http://localhost:3000", 
+    app_name: str = "Madlen AI"
+) -> AsyncGenerator[str, None]:
+    """
+    Streaming chat completion using Server-Sent Events (SSE).
+    Yields chunks of the response as they arrive.
+    """
+    
+    if not OPENROUTER_API_KEY:
+        yield json.dumps({"content": "This is a mock response because OPENROUTER_API_KEY is missing.", "done": True})
+        return
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "HTTP-Referer": site_url,
+        "X-Title": app_name,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                f"{OPENROUTER_URL}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=120.0
+            ) as response:
+                _update_rate_limit_from_headers(response.headers)
+                
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    yield json.dumps({"error": error_text.decode(), "done": True})
+                    return
+                
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data = line[6:]  # Remove "data: " prefix
+                        if data == "[DONE]":
+                            yield json.dumps({"done": True})
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            if "choices" in chunk and len(chunk["choices"]) > 0:
+                                delta = chunk["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield json.dumps({"content": content, "done": False})
+                        except json.JSONDecodeError:
+                            continue
+                            
+    except httpx.TimeoutException:
+        yield json.dumps({"error": "Request timed out", "done": True})
+    except Exception as e:
+        yield json.dumps({"error": str(e), "done": True})
 

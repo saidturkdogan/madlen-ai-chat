@@ -1,23 +1,29 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
-from ..auth import get_current_user
-from ..database import get_db
-from .. import models, schemas
-from ..services import openrouter
-import uuid
-from datetime import datetime
+from ..core.auth import get_current_user
+from ..core.database import get_db
+from .. import schemas
+from ..services.chat_service import ChatService
+import json
 
 router = APIRouter(
-    prefix="/api", # Consolidating under /api
+    prefix="/api", 
     tags=["chat"],
     responses={404: {"description": "Not found"}},
 )
 
-# --- MODELS ---
+@router.get("/rate-limit")
+async def get_rate_limit(db: Session = Depends(get_db)):
+    """Returns current rate limit status from OpenRouter"""
+    service = ChatService(db)
+    return service.get_rate_limit()
+
 @router.get("/models", response_model=List[schemas.AIModelDTO])
-async def list_models():
-    raw_models = await openrouter.get_models()
+async def list_models(db: Session = Depends(get_db)):
+    service = ChatService(db)
+    raw_models = await service.list_models()
     return [
         schemas.AIModelDTO(
             id=m["id"],
@@ -28,26 +34,14 @@ async def list_models():
         ) for m in raw_models
     ]
 
-# --- SESSIONS ---
 @router.get("/sessions", response_model=List[schemas.SessionResponse])
 def get_sessions(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Ensure user exists in DB
-    user_id = current_user.get("sub")
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        user = models.User(id=user_id, email=current_user.get("email")) # Clerk sends email often
-        db.add(user)
-        db.commit()
-
-    sessions = db.query(models.ChatSession)\
-        .filter(models.ChatSession.user_id == user_id)\
-        .order_by(models.ChatSession.updated_at.desc())\
-        .all()
-        
-    # Populate preview from last message if possible
+    service = ChatService(db)
+    sessions = service.get_user_sessions(current_user.get("sub"), current_user.get("email"))
+    
     results = []
     for s in sessions:
         preview = "New Chat"
@@ -69,149 +63,40 @@ def create_session(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    user_id = current_user.get("sub")
-    # Verify user existence (idempotent check)
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        user = models.User(id=user_id)
-        db.add(user)
-        db.commit()
-
-    new_session = models.ChatSession(user_id=user_id)
-    db.add(new_session)
-    db.commit()
-    db.refresh(new_session)
+    service = ChatService(db)
+    new_session = service.create_session(current_user.get("sub"))
     return new_session
 
-# --- MESSAGES ---
 @router.get("/sessions/{session_id}/messages", response_model=List[schemas.MessageResponse])
 def get_messages(
     session_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    service = ChatService(db)
     user_id = current_user.get("sub")
-    session = db.query(models.ChatSession).filter(models.ChatSession.id == session_id, models.ChatSession.user_id == user_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    return session.messages
+    return service.get_session_messages(session_id, user_id)
 
-@router.post("/chat", response_model=schemas.MessageResponse)
-async def chat(
-    request: schemas.ChatRequest,
-    session_id: str = None, # Optional if we want to support stateless, but for this app we usually pass session_id
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    user_id = current_user.get("sub")
-
-    # If session_id is provided in query (it should actually be in body or path typically, 
-    # but based on old code structure let's support query or assume a session must be created first).
-    # For better REST design, let's assume the frontend passes `session_id` as a query param or part of DTO.
-    # Updated: Frontend 'sendMessage' function sends it. Let's adjust schemas if needed.
-    # Actually, let's strict it: Frontend MUST create a session first.
-    
-    # Wait, the schemas.ChatRequest doesn't have session_id. 
-    # Let's read session_id from query param for simplicity matching existing frontend logic often used.
-    pass
-
-@router.post("/sessions/{session_id}/chat", response_model=schemas.MessageResponse)
-async def send_chat_message(
+@router.post("/sessions/{session_id}/chat/stream")
+async def stream_chat_message(
     session_id: str,
     request: schemas.ChatRequest,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    service = ChatService(db)
     user_id = current_user.get("sub")
-    session = db.query(models.ChatSession).filter(models.ChatSession.id == session_id, models.ChatSession.user_id == user_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # 1. Save User Message
-    user_msg_id = str(uuid.uuid4())
-    user_msg = models.Message(
-        id=user_msg_id,
-        session_id=session_id,
-        role="user",
-        content=request.message,
-        image_url=request.image
-    )
-    db.add(user_msg)
     
-    # 2. Get Context (Past messages)
-    # Limit context window? For now, fetch all sorted by time.
-    past_messages = db.query(models.Message)\
-        .filter(models.Message.session_id == session_id)\
-        .order_by(models.Message.timestamp.asc())\
-        .all()
+    generate_func = await service.stream_chat_message(session_id, user_id, request)
     
-    # Convert to OpenRouter format
-    or_messages = []
-    for m in past_messages:
-        # Check if message has an image (multi-modal)
-        if m.image_url and m.role == "user":
-            # Multi-modal message format for OpenRouter
-            or_messages.append({
-                "role": m.role,
-                "content": [
-                    {"type": "text", "text": m.content},
-                    {"type": "image_url", "image_url": {"url": m.image_url}}
-                ]
-            })
-        else:
-            or_messages.append({"role": m.role, "content": m.content})
-    
-    # Add current user message (it wasn't committed yet, so not in query result)
-    if request.image:
-        # Multi-modal message with image
-        or_messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": request.message},
-                {"type": "image_url", "image_url": {"url": request.image}}
-            ]
-        })
-    else:
-        or_messages.append({"role": "user", "content": request.message})
-
-    # 3. Call OpenRouter
-    ai_response = await openrouter.chat_completion(
-        model=request.model,
-        messages=or_messages
-    )
-    
-    # 4. Extract Response
-    if "choices" in ai_response and len(ai_response["choices"]) > 0:
-        ai_content = ai_response["choices"][0]["message"]["content"]
-    else:
-        ai_content = "Error: No response from AI."
-
-    # 5. Save AI Message
-    ai_msg = models.Message(
-        session_id=session_id,
-        role="assistant",
-        content=ai_content,
-        model=request.model
-    )
-    db.add(ai_msg)
-    
-    # Update session timestamp and title if first message
-    session.updated_at = datetime.utcnow()
-    if len(past_messages) == 0:
-        # Generate title capability could go here, for now use first few words
-        session.title = request.message[:30]
-
-    db.commit()
-    
-    # Return AI response to frontend
-    return schemas.MessageResponse(
-        id=ai_msg.id,
-        role="assistant",
-        content=ai_content,
-        timestamp=ai_msg.timestamp,
-        model=request.model,
-        image_url=None
+    return StreamingResponse(
+        generate_func(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
     )
 
 @router.delete("/sessions/{session_id}")
@@ -220,13 +105,74 @@ def delete_session(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    service = ChatService(db)
     user_id = current_user.get("sub")
-    session = db.query(models.ChatSession).filter(models.ChatSession.id == session_id, models.ChatSession.user_id == user_id).first()
+    service.delete_session(session_id, user_id)
+    return {"message": "Session deleted successfully"}
+
+# Export remains similar logic, could move to service but it returns StreamingResponse. 
+# Service should return data, Router wraps in StreamingResponse.
+@router.get("/sessions/{session_id}/export")
+def export_session(
+    session_id: str,
+    format: str = "json",
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = ChatService(db)
+    user_id = current_user.get("sub")
+    messages = service.get_session_messages(session_id, user_id)
+    # Mapping to export format can be here or in service. 
+    # For simplicity, keeping formatting logic here is okay as it's presentation layer.
+    
+    # We need session title etc. get_session_messages only returns messages.
+    # Service should probably have `get_session_details` or similar.
+    # Or just `get_user_sessions` and filter? No, inefficient.
+    # Let's add `get_session` to service public interface or `repository.get_session`.
+    session = service.repository.get_session(session_id, user_id) # Using repository directly if needed or expose via service
     
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    db.delete(session)
-    db.commit()
-    
-    return {"message": "Session deleted successfully"}
+
+    if format == "txt":
+        lines = [f"Chat Export: {session.title}", f"Date: {session.created_at}", "=" * 50, ""]
+        for msg in messages:
+            role = "You" if msg.role == "user" else "AI"
+            timestamp = msg.timestamp.strftime("%Y-%m-%d %H:%M:%S") if msg.timestamp else ""
+            lines.append(f"[{timestamp}] {role}:")
+            lines.append(msg.content)
+            lines.append("")
+        
+        content = "\n".join(lines)
+        return StreamingResponse(
+            iter([content]),
+            media_type="text/plain",
+            headers={
+                "Content-Disposition": f"attachment; filename=chat-{session_id[:8]}.txt"
+            }
+        )
+    else:
+        export_data = {
+            "session_id": session_id,
+            "title": session.title,
+            "created_at": session.created_at.isoformat() if session.created_at else None,
+            "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+            "messages": [
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+                    "model": msg.model,
+                    "image_url": msg.image_url
+                }
+                for msg in messages
+            ]
+        }
+        
+        return StreamingResponse(
+            iter([json.dumps(export_data, indent=2, ensure_ascii=False)]),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f"attachment; filename=chat-{session_id[:8]}.json"
+            }
+        )

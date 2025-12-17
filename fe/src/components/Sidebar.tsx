@@ -12,6 +12,7 @@ interface SidebarProps {
   onDeleteSession: (id: string) => void;
   isOpen: boolean;
   onCloseMobile: () => void;
+  onExportChat?: () => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -21,7 +22,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   onDeleteSession,
   isOpen,
-  onCloseMobile
+  onCloseMobile,
+  onExportChat
 }) => {
   const { user } = useUser();
   const { theme, toggleTheme } = useTheme();
@@ -98,7 +100,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        <div className="p-4">
+        <div className="p-4 space-y-2">
           <button
             onClick={() => {
               onNewChat();
@@ -109,7 +111,20 @@ const Sidebar: React.FC<SidebarProps> = ({
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
             New Chat
           </button>
+
+          {currentSessionId && onExportChat && (
+            <button
+              onClick={onExportChat}
+              className="w-full flex items-center justify-center gap-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 py-2.5 px-4 rounded-xl transition-colors text-sm font-medium"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Export Chat
+            </button>
+          )}
         </div>
+
 
         <div className="flex-1 overflow-y-auto px-3 pb-4">
           <h2 className="px-2 text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3">History</h2>

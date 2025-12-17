@@ -1,9 +1,18 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Sidebar from '../../components/Sidebar';
 import ChatInterface from '../../components/ChatInterface';
-import { fetchModels, fetchSessions, sendMessage, createSession } from '../../services/api';
+import {
+    fetchModels,
+    fetchSessions,
+    sendMessage,
+    createSession,
+    sendMessageStream,
+    fetchRateLimitInfo,
+    exportChatHistory,
+    RateLimitInfo
+} from '../../services/api';
 import { Message, AIModel, ChatSession } from '../../types';
 import { useAuth } from "@clerk/nextjs";
 import { useRouter } from 'next/navigation';
@@ -19,12 +28,22 @@ export default function ChatPage() {
     const [selectedModel, setSelectedModel] = useState<string>('');
     const [isLoading, setIsLoading] = useState(false);
     const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
+    const [streamingContent, setStreamingContent] = useState<string>('');
+    const [rateLimitInfo, setRateLimitInfo] = useState<RateLimitInfo | null>(null);
+    const [useStreaming, setUseStreaming] = useState<boolean>(true);
+    const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
 
     useEffect(() => {
         if (isLoaded && !userId) {
             router.push('/sign-in');
         }
     }, [isLoaded, userId, router]);
+
+    // Fetch rate limit info periodically
+    const updateRateLimitInfo = useCallback(async () => {
+        const info = await fetchRateLimitInfo();
+        setRateLimitInfo(info);
+    }, []);
 
     // Initial Data Load
     useEffect(() => {
@@ -49,6 +68,12 @@ export default function ChatPage() {
                     setSelectedModel(modelsData[0].id);
                 }
 
+                // Restore streaming preference
+                const savedStreaming = localStorage.getItem('useStreaming');
+                if (savedStreaming !== null) {
+                    setUseStreaming(savedStreaming === 'true');
+                }
+
                 setSessions(sessionsData);
 
                 // Restore saved session from localStorage
@@ -67,12 +92,15 @@ export default function ChatPage() {
                     }));
                     setMessages(sessionMessages);
                 }
+
+                // Fetch rate limit info
+                await updateRateLimitInfo();
             } catch (error) {
                 console.error("Failed to load initial data", error);
             }
         };
         loadData();
-    }, [userId, getToken]);
+    }, [userId, getToken, updateRateLimitInfo]);
 
     if (!isLoaded || !userId) {
         return (
@@ -95,6 +123,7 @@ export default function ChatPage() {
             setCurrentSessionId(newSession.id);
             localStorage.setItem('currentSessionId', newSession.id);
             setMessages([]);
+            setStreamingContent('');
             // On mobile, close sidebar after creation
             setIsSidebarOpen(false);
         } catch (error) {
@@ -104,6 +133,7 @@ export default function ChatPage() {
 
     const handleSelectSession = async (sessionId: string) => {
         setCurrentSessionId(sessionId);
+        setStreamingContent('');
         localStorage.setItem('currentSessionId', sessionId);
         try {
             const token = await getToken();
@@ -125,7 +155,7 @@ export default function ChatPage() {
         }
     };
 
-    const handleSendMessage = async (text: string, image?: File) => {
+    const handleSendMessage = async (text: string, image?: File, streaming: boolean = useStreaming) => {
         const token = await getToken();
         if (!token) return;
 
@@ -155,32 +185,93 @@ export default function ChatPage() {
         setMessages(prev => [...prev, userMsg]);
         setIsLoading(true);
 
-        try {
-            const response = await sendMessage(activeSessionId!, text, selectedModel, token, image);
-            // Backend returns MessageResponse directly, not wrapped in { message: ... }
-            const aiMessage: Message = {
-                id: response.id,
-                role: response.role as 'user' | 'assistant' | 'system',
-                content: response.content,
-                timestamp: response.timestamp,
-                imageUrl: response.image_url
-            };
-            setMessages(prev => [...prev, aiMessage]);
-        } catch (error) {
-            console.error("Failed to send message", error);
-            const errorMessage = error instanceof Error ? error.message : 'Failed to communicate with backend.';
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                content: `⚠️ ${errorMessage}`,
-                timestamp: new Date().toISOString()
-            }]);
-        } finally {
-            setIsLoading(false);
+        if (streaming) {
+            // Use streaming API
+            setStreamingContent('');
+            let accumulatedContent = '';
+
+            await sendMessageStream(
+                activeSessionId!,
+                text,
+                selectedModel,
+                token,
+                (chunk) => {
+                    accumulatedContent += chunk;
+                    setStreamingContent(accumulatedContent);
+                },
+                () => {
+                    // On complete - add final message
+                    const aiMessage: Message = {
+                        id: Date.now().toString(),
+                        role: 'assistant',
+                        content: accumulatedContent,
+                        timestamp: new Date().toISOString()
+                    };
+                    setMessages(prev => [...prev, aiMessage]);
+                    setStreamingContent('');
+                    setIsLoading(false);
+                    updateRateLimitInfo();
+                },
+                (error) => {
+                    // On error
+                    setMessages(prev => [...prev, {
+                        id: Date.now().toString(),
+                        role: 'system',
+                        content: `⚠️ ${error}`,
+                        timestamp: new Date().toISOString()
+                    }]);
+                    setStreamingContent('');
+                    setIsLoading(false);
+                },
+                image
+            );
+        } else {
+            // Use regular API
+            try {
+                const response = await sendMessage(activeSessionId!, text, selectedModel, token, image);
+                const aiMessage: Message = {
+                    id: response.id,
+                    role: response.role as 'user' | 'assistant' | 'system',
+                    content: response.content,
+                    timestamp: response.timestamp,
+                    imageUrl: response.image_url
+                };
+                setMessages(prev => [...prev, aiMessage]);
+                updateRateLimitInfo();
+            } catch (error) {
+                console.error("Failed to send message", error);
+                const errorMessage = error instanceof Error ? error.message : 'Failed to communicate with backend.';
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    content: `⚠️ ${errorMessage}`,
+                    timestamp: new Date().toISOString()
+                }]);
+            } finally {
+                setIsLoading(false);
+            }
         }
     };
 
+    const handleExportChat = async (format: 'json' | 'txt') => {
+        if (!currentSessionId) return;
 
+        try {
+            const token = await getToken();
+            if (!token) return;
+
+            await exportChatHistory(currentSessionId, token, format);
+            setShowExportMenu(false);
+        } catch (error) {
+            console.error("Failed to export chat", error);
+        }
+    };
+
+    const handleToggleStreaming = () => {
+        const newValue = !useStreaming;
+        setUseStreaming(newValue);
+        localStorage.setItem('useStreaming', String(newValue));
+    };
 
     const confirmDeleteSession = async () => {
         if (!sessionToDelete) return;
@@ -197,6 +288,7 @@ export default function ChatPage() {
             if (currentSessionId === sessionToDelete) {
                 setCurrentSessionId(null);
                 setMessages([]);
+                setStreamingContent('');
                 localStorage.removeItem('currentSessionId');
             }
         } catch (error) {
@@ -241,6 +333,47 @@ export default function ChatPage() {
                 </div>
             )}
 
+            {/* Export Menu */}
+            {showExportMenu && currentSessionId && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowExportMenu(false)}>
+                    <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg w-full max-w-xs p-4" onClick={e => e.stopPropagation()}>
+                        <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-4">Export Chat</h3>
+                        <div className="space-y-2">
+                            <button
+                                onClick={() => handleExportChat('json')}
+                                className="w-full flex items-center gap-3 p-3 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                            >
+                                <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                </svg>
+                                <div className="text-left">
+                                    <div className="font-medium text-slate-800 dark:text-white">JSON Format</div>
+                                    <div className="text-xs text-slate-500">Structured data format</div>
+                                </div>
+                            </button>
+                            <button
+                                onClick={() => handleExportChat('txt')}
+                                className="w-full flex items-center gap-3 p-3 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                            >
+                                <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                                <div className="text-left">
+                                    <div className="font-medium text-slate-800 dark:text-white">Text Format</div>
+                                    <div className="text-xs text-slate-500">Human readable format</div>
+                                </div>
+                            </button>
+                        </div>
+                        <button
+                            onClick={() => setShowExportMenu(false)}
+                            className="w-full mt-4 py-2 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 text-sm transition-colors"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
             <Sidebar
                 sessions={sessions}
                 currentSessionId={currentSessionId}
@@ -249,12 +382,14 @@ export default function ChatPage() {
                 onDeleteSession={setSessionToDelete}
                 isOpen={isSidebarOpen}
                 onCloseMobile={() => setIsSidebarOpen(false)}
+                onExportChat={() => setShowExportMenu(true)}
             />
 
             <main className="flex-1 h-full w-full">
                 <ChatInterface
                     messages={messages}
                     isLoading={isLoading}
+                    streamingContent={streamingContent}
                     onSendMessage={handleSendMessage}
                     models={models}
                     selectedModel={selectedModel}
@@ -263,6 +398,9 @@ export default function ChatPage() {
                         localStorage.setItem('selectedModel', modelId);
                     }}
                     onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+                    rateLimitInfo={rateLimitInfo}
+                    useStreaming={useStreaming}
+                    onToggleStreaming={handleToggleStreaming}
                 />
             </main>
         </div>

@@ -4,6 +4,7 @@ A full-stack AI chat application that allows users to interact with multiple AI 
 
 ## 🚀 Features
 
+### Core Features
 - **Multiple AI Models**: Access Llama, Gemma, Mistral, DeepSeek, and more
 - **Real-time Chat**: Seamless conversation with AI models
 - **Multi-modal Support**: Upload images for vision-capable models
@@ -11,6 +12,14 @@ A full-stack AI chat application that allows users to interact with multiple AI 
 - **Dark/Light Theme**: Toggle between themes
 - **Authentication**: Secure login with Clerk
 - **OpenTelemetry**: Distributed tracing with Jaeger
+
+### Enhanced UX Features
+- **Streaming Responses (SSE)**: Real-time AI response streaming for instant feedback
+- **Rate Limit Indicator**: Visual display of remaining API requests
+- **Copy to Clipboard**: One-click copy for messages and code blocks
+- **Syntax Highlighting**: Beautiful code highlighting with Prism.js
+- **Export Chat History**: Download conversations in JSON or TXT format
+
 
 ## 🛠️ Tech Stack
 
