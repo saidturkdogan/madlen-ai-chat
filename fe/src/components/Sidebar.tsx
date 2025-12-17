@@ -28,7 +28,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   const { user } = useUser();
   const { theme, toggleTheme } = useTheme();
 
-  // Helper function to strip markdown formatting from text
   const stripMarkdown = (text: string): string => {
     if (!text) return '';
     return text

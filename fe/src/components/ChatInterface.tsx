@@ -21,7 +21,6 @@ interface ChatInterfaceProps {
   onToggleStreaming: () => void;
 }
 
-// Copy button component
 const CopyButton: React.FC<{ text: string }> = ({ text }) => {
   const [copied, setCopied] = useState(false);
 
@@ -54,7 +53,6 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
   );
 };
 
-// Code block with copy button and syntax highlighting
 const CodeBlock: React.FC<{ language: string; children: string }> = ({ language, children }) => {
   const [copied, setCopied] = useState(false);
 
@@ -151,7 +149,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
-  // Rate limit percentage calculation
   const rateLimitPercentage = rateLimitInfo?.requests_remaining && rateLimitInfo?.requests_limit
     ? (rateLimitInfo.requests_remaining / rateLimitInfo.requests_limit) * 100
     : null;

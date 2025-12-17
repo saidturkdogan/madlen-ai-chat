@@ -2,18 +2,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# Load env variables first, before importing other modules that might use them
 load_dotenv()
 
 from .routers import chat
 import os
 from .core.database import engine, Base
-from . import models # Import models so they are registered
+from . import models
 from .core.telemetry import setup_telemetry
 
-# Create Tables
 try:
-    # Ensure models are imported before this runs
     Base.metadata.create_all(bind=engine)
     print("--- SUCCESS: Database tables created successfully! ---")
 except Exception as e:
@@ -24,16 +21,10 @@ except Exception as e:
     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
 app = FastAPI(title="Madlen AI Backend")
-# Removed duplicate lines
 
-# Setup OpenTelemetry
 setup_telemetry(app, engine)
 
-
-# CORS setup for frontend communication
-origins = [
-    "*", # Allow all for dev
-]
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,4 +39,3 @@ def read_root():
     return {"message": "Welcome to Madlen AI API"}
 
 app.include_router(chat.router)
-# Trigger reload

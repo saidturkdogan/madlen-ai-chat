@@ -16,7 +16,6 @@ router = APIRouter(
 
 @router.get("/rate-limit")
 async def get_rate_limit(db: Session = Depends(get_db)):
-    """Returns current rate limit status from OpenRouter"""
     service = ChatService(db)
     return service.get_rate_limit()
 
@@ -110,8 +109,6 @@ def delete_session(
     service.delete_session(session_id, user_id)
     return {"message": "Session deleted successfully"}
 
-# Export remains similar logic, could move to service but it returns StreamingResponse. 
-# Service should return data, Router wraps in StreamingResponse.
 @router.get("/sessions/{session_id}/export")
 def export_session(
     session_id: str,
@@ -122,14 +119,7 @@ def export_session(
     service = ChatService(db)
     user_id = current_user.get("sub")
     messages = service.get_session_messages(session_id, user_id)
-    # Mapping to export format can be here or in service. 
-    # For simplicity, keeping formatting logic here is okay as it's presentation layer.
-    
-    # We need session title etc. get_session_messages only returns messages.
-    # Service should probably have `get_session_details` or similar.
-    # Or just `get_user_sessions` and filter? No, inefficient.
-    # Let's add `get_session` to service public interface or `repository.get_session`.
-    session = service.repository.get_session(session_id, user_id) # Using repository directly if needed or expose via service
+    session = service.repository.get_session(session_id, user_id)
     
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

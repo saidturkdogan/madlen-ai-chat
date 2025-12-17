@@ -66,11 +66,9 @@ class ChatRepository:
         self.db.commit()
 
     def update_session_title(self, session_id: str, title: str):
-        # We need to query again if session object is not attached or just use the object passed if we had `update_session(session)`
-        # simplified to take session object often, but let's stick to object manipulation if we have it, or query if ID.
         pass
     
     def update_session(self, session: models.ChatSession):
-        self.db.add(session) # Merges if detached
+        self.db.add(session)
         self.db.commit()
         self.db.refresh(session)

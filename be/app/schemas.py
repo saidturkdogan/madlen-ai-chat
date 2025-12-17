@@ -36,7 +36,7 @@ class SessionResponse(SessionBase):
 class ChatRequest(BaseModel):
     message: str
     model: str
-    image: Optional[str] = None # Base64 or URL
+    image: Optional[str] = None
 
 class AIModelDTO(BaseModel):
     id: str

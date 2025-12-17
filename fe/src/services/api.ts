@@ -2,14 +2,12 @@ import { AIModel, ChatSession, ChatResponse, Message } from '../types';
 
 const API_BASE_URL = 'http://localhost:8000/api';
 
-// Rate limit info interface
 export interface RateLimitInfo {
   requests_remaining: number | null;
   requests_limit: number | null;
   requests_reset: string | null;
 }
 
-// Helper to get headers with Auth token
 const getHeaders = async (token?: string | null) => {
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -22,7 +20,7 @@ const getHeaders = async (token?: string | null) => {
 
 export const fetchModels = async (): Promise<AIModel[]> => {
   try {
-    const response = await fetch(`${API_BASE_URL}/models`, { cache: 'no-store' }); // Ensure fresh fetch
+    const response = await fetch(`${API_BASE_URL}/models`, { cache: 'no-store' });
     if (!response.ok) throw new Error('Failed to fetch models');
     return await response.json();
   } catch (error) {
@@ -31,7 +29,6 @@ export const fetchModels = async (): Promise<AIModel[]> => {
   }
 };
 
-// Fetch rate limit info
 export const fetchRateLimitInfo = async (): Promise<RateLimitInfo> => {
   try {
     const response = await fetch(`${API_BASE_URL}/rate-limit`, { cache: 'no-store' });
@@ -89,7 +86,6 @@ export const sendMessage = async (
   image?: File
 ): Promise<ChatResponse> => {
 
-  // Convert image to base64 if provided
   let imageBase64: string | null = null;
   if (image) {
     imageBase64 = await fileToBase64(image);
@@ -108,7 +104,6 @@ export const sendMessage = async (
   });
 
   if (!response.ok) {
-    // Try to parse error detail from backend
     let errorMessage = 'Failed to send message';
     try {
       const errorData = await response.json();
@@ -116,7 +111,6 @@ export const sendMessage = async (
         errorMessage = errorData.detail;
       }
     } catch {
-      // If response is not JSON, use status text
       if (response.status === 429) {
         errorMessage = 'Rate limit exceeded. Please wait a moment and try again.';
       } else if (response.status === 404) {
@@ -130,7 +124,6 @@ export const sendMessage = async (
   return await response.json();
 };
 
-// Streaming message support
 export const sendMessageStream = async (
   sessionId: string,
   content: string,
@@ -194,7 +187,6 @@ export const sendMessageStream = async (
               return;
             }
           } catch {
-            // Skip malformed JSON
           }
         }
       }
@@ -205,7 +197,6 @@ export const sendMessageStream = async (
   }
 };
 
-// Export chat history
 export const exportChatHistory = async (
   sessionId: string,
   token: string,
@@ -231,14 +222,12 @@ export const exportChatHistory = async (
   document.body.removeChild(a);
 };
 
-// Helper function to convert File to base64
 const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
     reader.onload = () => {
       const result = reader.result as string;
-      // Return the full data URL (includes mime type prefix)
       resolve(result);
     };
     reader.onerror = (error) => reject(error);

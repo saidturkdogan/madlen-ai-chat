@@ -7,7 +7,7 @@ from .core.database import Base
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True) # Will use Clerk User ID
+    id = Column(String, primary_key=True)
     email = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -30,10 +30,10 @@ class Message(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     session_id = Column(String, ForeignKey("chat_sessions.id"))
-    role = Column(String) # 'user' or 'assistant'
+    role = Column(String)
     content = Column(Text)
-    model = Column(String, nullable=True) # Which model generated this (for assistant)
-    image_url = Column(String, nullable=True) # Opitonal image URL
+    model = Column(String, nullable=True)
+    image_url = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("ChatSession", back_populates="messages")

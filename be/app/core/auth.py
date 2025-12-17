@@ -6,10 +6,9 @@ import jwt
 from jwt.algorithms import RSAAlgorithm
 import json
 
-# Setup security scheme
 security = HTTPBearer()
 
-CLERK_ISSUER = os.getenv("CLERK_ISSUER") # e.g., https://<your-clerk-domain>.clerk.accounts.dev
+CLERK_ISSUER = os.getenv("CLERK_ISSUER")
 CLERK_JWKS_URL = f"{CLERK_ISSUER}/.well-known/jwks.json"
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Security(security)):
@@ -20,18 +19,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Security(
             print("CRITICAL: CLERK_ISSUER env var is not set!")
             raise ValueError("CLERK_ISSUER not set")
 
-        # Fetch JWKS (in a real app, cache this!)
         async with httpx.AsyncClient() as client:
             print(f"Fetching JWKS from: {CLERK_JWKS_URL}")
             response = await client.get(CLERK_JWKS_URL)
             response.raise_for_status()
             jwks = response.json()
 
-        # Get the key ID from the header
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get("kid")
 
-        # Find the matching key
         rsa_key = {}
         for key in jwks["keys"]:
             if key["kid"] == kid:
@@ -57,9 +53,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Security(
             token,
             public_key,
             algorithms=["RS256"],
-            audience=os.getenv("CLERK_AUDIENCE"), # Optional, or verify issuer
+            audience=os.getenv("CLERK_AUDIENCE"),
             issuer=CLERK_ISSUER,
-            options={"verify_aud": False} # Set to True if you configure audiences
+            options={"verify_aud": False}
         )
         
         return payload

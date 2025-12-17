@@ -3,7 +3,6 @@
 import React from 'react';
 import { ExternalLink } from 'lucide-react';
 
-// These are the free models from OpenRouter that we support
 const models = [
     {
         id: 'meta-llama/llama-3.3-70b-instruct:free',

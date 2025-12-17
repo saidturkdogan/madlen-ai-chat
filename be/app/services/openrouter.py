@@ -8,14 +8,12 @@ from fastapi import HTTPException
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 
-# Rate limit tracking (simple in-memory, per-instance)
 rate_limit_info = {
     "requests_remaining": None,
     "requests_limit": None,
     "requests_reset": None
 }
 
-# Fallback list of stable free models if API fails
 FALLBACK_FREE_MODELS = [
     {
         "id": "meta-llama/llama-3.3-70b-instruct:free",
@@ -48,14 +46,11 @@ FALLBACK_FREE_MODELS = [
 ]
 
 def get_rate_limit_info() -> Dict[str, Any]:
-    """Returns current rate limit information"""
     return rate_limit_info.copy()
 
 def _update_rate_limit_from_headers(headers: httpx.Headers):
-    """Update rate limit info from response headers"""
     global rate_limit_info
     
-    # OpenRouter uses these headers for rate limiting
     if "x-ratelimit-remaining" in headers:
         rate_limit_info["requests_remaining"] = int(headers.get("x-ratelimit-remaining", 0))
     if "x-ratelimit-limit" in headers:
@@ -64,11 +59,6 @@ def _update_rate_limit_from_headers(headers: httpx.Headers):
         rate_limit_info["requests_reset"] = headers.get("x-ratelimit-reset")
 
 async def get_models() -> List[Dict[str, Any]]:
-    """
-    Fetches the list of available free models from OpenRouter API.
-    Filters models where pricing.prompt == "0" (free models).
-    Falls back to a static list if the API call fails.
-    """
     try:
         headers = {}
         if OPENROUTER_API_KEY:
@@ -84,16 +74,13 @@ async def get_models() -> List[Dict[str, Any]]:
             _update_rate_limit_from_headers(response.headers)
             data = response.json()
             
-            # Filter for free models (pricing.prompt == "0")
             free_models = []
             for model in data.get("data", []):
                 pricing = model.get("pricing", {})
-                prompt_price = pricing.get("prompt", "1")  # Default to non-free
+                prompt_price = pricing.get("prompt", "1")
                 
-                # Check if it's free (prompt price is "0")
                 try:
                     if prompt_price == "0" or float(prompt_price) == 0:
-                        # Extract provider from model id (e.g., "openai/gpt-4" -> "Openai")
                         model_id = model.get("id", "")
                         provider = model_id.split("/")[0].replace("-", " ").title() if "/" in model_id else "Unknown"
                         
@@ -107,7 +94,6 @@ async def get_models() -> List[Dict[str, Any]]:
                 except (ValueError, TypeError):
                     continue
             
-            # Sort by context length (larger first) and limit to top 15
             free_models.sort(key=lambda x: x.get("context_length", 0), reverse=True)
             
             if free_models:
@@ -129,7 +115,6 @@ async def chat_completion(
 ) -> Dict[str, Any]:
     
     if not OPENROUTER_API_KEY:
-        # Fallback for dev without key
         print("WARNING: OPENROUTER_API_KEY not set. Returning mock response.")
         return {
             "choices": [{
@@ -152,9 +137,8 @@ async def chat_completion(
         "messages": messages
     }
 
-    # Retry logic with exponential backoff for rate limiting
     max_retries = 3
-    base_delay = 2  # seconds
+    base_delay = 2
     
     async with httpx.AsyncClient() as client:
         for attempt in range(max_retries):
@@ -174,10 +158,9 @@ async def chat_completion(
                 status_code = e.response.status_code
                 _update_rate_limit_from_headers(e.response.headers)
                 
-                # Handle rate limiting (429)
                 if status_code == 429:
                     if attempt < max_retries - 1:
-                        delay = base_delay * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
+                        delay = base_delay * (2 ** attempt)
                         print(f"Rate limited (429). Retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
                         await asyncio.sleep(delay)
                         continue
@@ -188,7 +171,6 @@ async def chat_completion(
                             detail="Rate limit exceeded. Please wait a moment and try again. Free models have strict usage limits."
                         )
                 
-                # Handle model not found (404)
                 elif status_code == 404:
                     print(f"Model not found: {model}")
                     raise HTTPException(
@@ -196,7 +178,6 @@ async def chat_completion(
                         detail=f"Model '{model}' not found or unavailable. Please select a different model."
                     )
                 
-                # Handle invalid model ID (400)
                 elif status_code == 400:
                     print(f"Invalid model ID: {model}")
                     raise HTTPException(
@@ -204,7 +185,6 @@ async def chat_completion(
                         detail=f"Invalid model ID '{model}'. Please select a valid model from the list."
                     )
                 
-                # Other errors
                 print(f"OpenRouter API Error: {error_text}")
                 raise HTTPException(status_code=status_code, detail=f"OpenRouter Error: {error_text}")
                 
@@ -227,10 +207,6 @@ async def chat_completion_stream(
     site_url: str = "http://localhost:3000", 
     app_name: str = "Madlen AI"
 ) -> AsyncGenerator[str, None]:
-    """
-    Streaming chat completion using Server-Sent Events (SSE).
-    Yields chunks of the response as they arrive.
-    """
     
     if not OPENROUTER_API_KEY:
         yield json.dumps({"content": "This is a mock response because OPENROUTER_API_KEY is missing.", "done": True})
@@ -267,7 +243,7 @@ async def chat_completion_stream(
                 
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
-                        data = line[6:]  # Remove "data: " prefix
+                        data = line[6:]
                         if data == "[DONE]":
                             yield json.dumps({"done": True})
                             break
@@ -285,4 +261,3 @@ async def chat_completion_stream(
         yield json.dumps({"error": "Request timed out", "done": True})
     except Exception as e:
         yield json.dumps({"error": str(e), "done": True})
-
