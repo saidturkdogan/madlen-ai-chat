@@ -2,8 +2,12 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "../contexts/ThemeContext";
+import { ClerkProvider } from '@clerk/nextjs'
 
 const inter = Inter({ subsets: ["latin"] });
+
+// Force dynamic rendering to avoid prerendering issues with Clerk
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
     title: "Madlen AI",
@@ -14,8 +18,6 @@ export const metadata: Metadata = {
         apple: '/logo.png',
     },
 };
-
-import { ClerkProvider } from '@clerk/nextjs'
 
 export default function RootLayout({
     children,
